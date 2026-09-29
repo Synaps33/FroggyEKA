@@ -1,0 +1,25 @@
+#pragma once
+#include <cstdint>
+#include <type_traits>
+#include <cstring>
+
+namespace std {
+    template <typename T>
+    constexpr int popcount(T val) noexcept {
+        return __builtin_popcountll(static_cast<unsigned long long>(val));
+    }
+
+    template <typename T>
+    constexpr int countl_zero(T val) noexcept {
+        if (val == 0) return sizeof(T) * 8;
+        return __builtin_clzll(static_cast<unsigned long long>(val)) - (sizeof(unsigned long long) - sizeof(T)) * 8;
+    }
+
+    template <typename To, typename From>
+    To bit_cast(const From& src) noexcept {
+        static_assert(sizeof(To) == sizeof(From), "bit_cast sizes must match");
+        To dst;
+        std::memcpy(&dst, &src, sizeof(To));
+        return dst;
+    }
+}

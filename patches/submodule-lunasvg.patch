@@ -1,0 +1,59 @@
+diff --git a/plutovg/source/plutovg-font.c b/plutovg/source/plutovg-font.c
+index 3dae6f9..38d7ee8 100644
+--- a/plutovg/source/plutovg-font.c
++++ b/plutovg/source/plutovg-font.c
+@@ -692,6 +692,17 @@ plutovg_font_face_t* plutovg_font_face_cache_get(plutovg_font_face_cache_t* cach
+ 
+ #ifdef _WIN32
+ #include <windows.h>
++#elif defined(SF2000)
++#include <stdio.h>
++#include <stdlib.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <dirent.h>
++#include <limits.h>
++#include <sys/stat.h>
++#ifndef PATH_MAX
++#define PATH_MAX 512
++#endif
+ #else
+ #include <fcntl.h>
+ #include <unistd.h>
+@@ -736,6 +747,36 @@ static void plutovg_unmap(void* data, long length)
+     UnmapViewOfFile(data);
+ }
+ 
++#elif defined(SF2000)
++
++static void* plutovg_mmap(const char* filename, long* length)
++{
++    FILE* f = fopen(filename, "rb");
++    if(!f)
++        return NULL;
++    fseek(f, 0, SEEK_END);
++    long size = ftell(f);
++    fseek(f, 0, SEEK_SET);
++    if(size <= 0) {
++        fclose(f);
++        return NULL;
++    }
++    void* data = malloc(size);
++    if(!data) {
++        fclose(f);
++        return NULL;
++    }
++    fread(data, 1, size, f);
++    fclose(f);
++    *length = size;
++    return data;
++}
++
++static void plutovg_unmap(void* data, long length)
++{
++    free(data);
++}
++
+ #else
+ 
+ static void* plutovg_mmap(const char* filename, long* length)

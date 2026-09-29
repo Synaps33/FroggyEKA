@@ -1,0 +1,323 @@
+diff --git a/Makefile b/Makefile
+index 25e7359..c5bb751 100644
+--- a/Makefile
++++ b/Makefile
+@@ -79,6 +79,9 @@ LDFLAGS += --build-id
+ CXX_LDFLAGS := -EL -march=mips32 -mtune=mips32 -msoft-float
+ CXX_LDFLAGS += -Wl,--gc-sections --static
+ CXX_LDFLAGS += -z max-page-size=32
++# Route free() calls through __wrap_free in libretro_frontend/lib.c, which can
++# report invalid pointers together with the caller address (heap debugging).
++CXX_LDFLAGS += -Wl,--wrap=free
+ 
+ CORE_OBJS = $(patsubst $(SRC_DIR)/libretro_frontend/%.c, $(BUILD_DIR)/%.o, $(wildcard $(SRC_DIR)/libretro_frontend/*.c))
+ CORE_OBJS += $(BUILD_DIR)/debug.o
+@@ -86,9 +89,11 @@ LOADER_OBJS = $(BUILD_DIR)/init.o $(BUILD_DIR)/main.o $(BUILD_DIR)/debug.o
+ 
+ # Default target
+ ifneq ($(CORE),)
+-all: $(BUILD_DIR)/core_87000000 $(BUILD_DIR)/bisrv.asd install
++install: $(BUILD_DIR)/core_87000000 $(BUILD_DIR)/bisrv.asd
++all: install
+ else
+-all: $(BUILD_DIR)/bisrv.asd install
++install: $(BUILD_DIR)/bisrv.asd
++all: install
+ endif
+ 
+ $(BUILD_DIR):
+diff --git a/libs/libretro-common b/libs/libretro-common
+--- a/libs/libretro-common
++++ b/libs/libretro-common
+@@ -1 +1 @@
+-Subproject commit 9362316bf1da38160b324a1515bfb83e44ebd7af
++Subproject commit 9362316bf1da38160b324a1515bfb83e44ebd7af-dirty
+diff --git a/src/debug.c b/src/debug.c
+index 2360734..24c697f 100644
+--- a/src/debug.c
++++ b/src/debug.c
+@@ -199,18 +199,11 @@ static bool is_file_exists(const char *path)
+ 
+ static bool is_xlog_enabled()
+ {
+-	static bool enabled;
+-	static bool first_call = true;
+-
+-	if (first_call)
+-	{
+-		first_call = false;
+-
+-		// only allow logging if log file already exists
+-		enabled = is_file_exists(LOG_FILENAME);
+-	}
+-
+-	return enabled;
++	// Always log in this build. Requiring the log file to pre-exist silently
++	// disabled every diagnostic (including crash/BSOD reports) whenever the
++	// file was missing, which made remote debugging impossible. xlog() opens
++	// the file with "a", so the first call creates it on demand.
++	return true;
+ }
+ 
+ void xlog_clear()
+diff --git a/src/libretro_frontend/core_api.c b/src/libretro_frontend/core_api.c
+index 579a17e..1e4251b 100644
+--- a/src/libretro_frontend/core_api.c
++++ b/src/libretro_frontend/core_api.c
+@@ -170,62 +170,135 @@ static void call_dtors()
+ 	}
+ }
+ 
++#define LOADER_ADDR 0x80001500
++typedef void (*loader_func_t)(const char *path, int load_state);
++static const loader_func_t direct_loader = (loader_func_t)LOADER_ADDR;
++
++static inline void clear_snd_task_flags(void) {
++	g_snd_task_flags = 0;
++#if defined(GB300V2)
++	*(volatile int *)0x80c5ab64 = 0;
++#else
++	*(volatile int *)0x80c0b574 = 0;
++#endif
++}
++
+ // Wrap run_game for FrogUI or other menu cores so we can unload game and deinit
+ void wrap_run_game(const char *filename, int load_state) {
+ 	wrap_retro_unload_game();
+ 	wrap_retro_deinit();
+-	run_game(filename, load_state);
++	clear_snd_task_flags();
++	direct_loader(filename, load_state);
++	while (1) {
++		dly_tsk(100);
++	}
+ }
+ 
+-// Run the Menu core as a method of exiting
++static void get_menu_rom_info(const char **out_name, const char **out_path) {
++	// The stock run_game() dispatches on the path's extension, so the menu
++	// must be launched through a ".gba"-suffixed stub (as the original
++	// multicore code did with "menu;p.gba"). On this card the stub exists
++	// as /mnt/sda1/ROMS/menu;m.gba and resolves to cores/menu/core_87000000.
++	const char *menu_file = "menu;m.gba";
++	const char *menu_path = "/mnt/sda1/ROMS/menu;m.gba";
++
++	if (fs_access(menu_path, 0) != 0) {
++		// Fallbacks without the .gba stub
++		menu_file = "menu;menu;m.gba";
++		menu_path = "/mnt/sda1/ROMS/menu/m";
++
++		if (fs_access(menu_path, 0) != 0) {
++			if (fs_access("/mnt/sda1/roms/menu/m", 0) == 0) {
++				menu_file = "menu;menu;m.gba";
++				menu_path = "/mnt/sda1/roms/menu/m";
++			}
++			else if (fs_access("/mnt/sda1/ROMS/menu;p.gba", 0) == 0) {
++				menu_file = "menu;p.gba";
++				menu_path = "/mnt/sda1/ROMS/menu;p.gba";
++			}
++		}
++	}
++
++	if (out_name) *out_name = menu_file;
++	if (out_path) *out_path = menu_path;
++}
++
++// Run the Menu core as a method of exiting.
++// This is the official multicore exit path: unload the game, deinit the core
++// and launch the FrogUI menu core through the stock run_game() launcher.
++// Must only be called from firmware context (correct $gp), e.g. from
++// dummy_run_emulator_menu() or after JavaTask has been unwound.
+ void shutdown_game(void) {
++	static bool s_in_shutdown = false;
++	if (s_in_shutdown) {
++		xlog("[SHUTDOWN] Already in shutdown, skipping\n");
++		return;
++	}
++	s_in_shutdown = true;
++
+ 	// Unload the game before anything else to preserve framebuffer
+ 	wrap_retro_unload_game();
+ 
+-	// Init a black framebuffer to black out the screen before loading a new game
+-    size_t framebuffer_size = 640 * 480 * sizeof(uint16_t);
+-    uint16_t* framebuffer = (uint16_t*)malloc(framebuffer_size);
+-    memset(framebuffer, 0x0000, framebuffer_size);
+-	uint16_t pixel_pitch = 640 * sizeof(uint16_t);
+-
+-	// Write framebuffer to screen then free it
+-	run_screen_write(framebuffer, 640, 480, pixel_pitch); // Is this the proper way to do this?
+-	free(framebuffer);
++	// Black out the screen before loading the menu
++	size_t framebuffer_size = 640 * 480 * sizeof(uint16_t);
++	uint16_t *framebuffer = (uint16_t *)malloc(framebuffer_size);
++	if (framebuffer) {
++		memset(framebuffer, 0, framebuffer_size);
++		run_screen_write(framebuffer, 640, 480, 640 * sizeof(uint16_t));
++		free(framebuffer);
++	}
+ 
+-	// Prepare the loader to load the menu
+-	strcpy(ptr_gs_run_game_file, "menu;p.gba");
++	// Prepare the loader to load the menu core
++	const char *menu_name = NULL;
++	const char *menu_path = NULL;
++	get_menu_rom_info(&menu_name, &menu_path);
++	strcpy(ptr_gs_run_game_file, menu_name);
+ 	strcpy(ptr_gs_run_game_name, "FrogUI");
+ 
+ 	// Deinit before running the menu
+ 	wrap_retro_deinit();
+-	run_game("/mnt/sda1/ROMS/menu;p.gba", 0);
++	clear_snd_task_flags();
++
++	// Clear any pending joy state: if the firmware sees SELECT+START (9) still
++	// held while the menu core starts, it immediately triggers the pause/quit
++	// flow and the menu ends up reloading in a loop with a black screen.
++	g_joy_task_state = 0;
++	g_joy_state = 0;
++
++	xlog("[SHUTDOWN] Launching menu core: %s (joy=0x%08x)\n", menu_path, g_joy_task_state);
++	run_game(menu_path, 0);
++
++	// run_game() should never return; safety net just in case
++	while (1) {
++		dly_tsk(100);
++	}
+ }
+ 
+ // Patch pause menu
+ int dummy_run_emulator_menu(void) {
+-	save_srm(0); // Save before loading the pause menu (incase of crashes + replace savesrm hotkey)
+-
+-	// Save a copy of the framebuffer before opening
+-	// Needed for save states
+-	state_fb_width = g_run_osd_width;
+-	state_fb_height = g_run_osd_height;
+-    state_framebuffer_size = state_fb_width * state_fb_height * 2;
+-    state_framebuffer = malloc(state_framebuffer_size);
+-    memcpy(state_framebuffer, gp_run_osd_data, state_framebuffer_size);
+-
+-	unsigned int run_emulator_menu_response = run_emulator_menu();
+-	if (g_enable_frogui_patch) {
+-		if (run_emulator_menu_response == 1) { // Replace quit button
+-			shutdown_game();
+-		}
+-		free(state_framebuffer);
+-		state_framebuffer = NULL;
+-		return 0;
+-	} else {
+-		free(state_framebuffer);
+-		state_framebuffer = NULL;
+-		return run_emulator_menu_response;
++	// === J2ME core only ===
++	// The J2ME core handles SELECT+START itself (gb300_poll_events unwinds
++	// JavaTask via longjmp). The firmware then reaches this hook because
++	// g_joy_task_state == 9 (SELECT+START). Instead of showing the pause
++	// menu, exit directly back to FrogUI via the standard multicore path.
++	xlog("[MENU] J2ME core: SELECT+START -> exiting to FrogUI menu\n");
++
++	// Wait up to 1s for the user to release SELECT+START so the freshly
++	// launched menu core does not start with the combo still held.
++	for (int i = 0; i < 100; i++) {
++		if ((*(volatile uint32_t *)&g_joy_task_state & 0x9) != 0x9)
++			break;
++		dly_tsk(10);
+ 	}
++
++	// Clear the firmware joy state; otherwise the firmware run_emulator loop
++	// for the menu core can see SELECT+START and immediately enter the
++	// pause/quit flow (menu reload loop, black screen).
++	g_joy_task_state = 0;
++	g_joy_state = 0;
++
++	shutdown_game();	// never returns: launches the FrogUI menu core
++	return 0;
+ }
+ 
+ // __core_entry__ must be placed at a known location in the binary (at the beginning)
+@@ -868,10 +941,7 @@ static void frameskip_cb(BOOL flag) {
+ }
+ 
+ static void failed_retro_run(void) {
+-	// Prepare the loader and load the menu
+-	strcpy(ptr_gs_run_game_file, "menu;p.gba");
+-	strcpy(ptr_gs_run_game_name, "FrogUI");
+-	run_game("/mnt/sda1/ROMS/menu;p.gba", 0);
++	shutdown_game();
+ }
+ 
+ void darken_rgb565_buffer(const void* buffer, unsigned width, unsigned height, size_t pitch_bytes, uint8_t darken_percentage) {
+diff --git a/src/libretro_frontend/lib.c b/src/libretro_frontend/lib.c
+index f9a8a14..bfe68df 100644
+--- a/src/libretro_frontend/lib.c
++++ b/src/libretro_frontend/lib.c
+@@ -65,22 +65,62 @@ void *sbrk(ptrdiff_t incr)
+ 	if (!s_heap_ptr)
+ 	{
+ 		s_heap_ptr = gp_buf_64m;	// use stock's 64MB scratch buffer
+-		s_heap_end = gp_buf_64m + 0x4000000;
++		// GB300 has only ~64MB of RAM in total, so leave headroom for the
++		// firmware/OS and use at most 48MB of it for the emulator heap.
++		s_heap_end = (void*)((char*)gp_buf_64m + 0x3000000);
++		xlog("sbrk init: heap_base=%p heap_end=%p (48MB)\n", s_heap_ptr, s_heap_end);
+ 	}
+ 
+ 	void *curr_ptr = s_heap_ptr;
+-	void *new_ptr = s_heap_ptr + incr;
++	void *new_ptr = (void*)((char*)s_heap_ptr + incr);
+ 
+-	if (new_ptr >= s_heap_end)
+-		lcd_bsod("sbrk: out of memory");
++	if (new_ptr > s_heap_end || new_ptr < gp_buf_64m)
++	{
++		xlog("sbrk OOM: curr=%p incr=%d end=%p used=%u KB\n",
++			curr_ptr, (int)incr, s_heap_end, (unsigned)(((char*)curr_ptr - (char*)gp_buf_64m) / 1024));
++		return (void*)-1;
++	}
+ 
+ 	s_heap_ptr = new_ptr;
+ 
+-// __xlog("sbrk: ret=%p incr=%d s_heap_ptr=%p\n", curr_ptr, (int)incr, s_heap_ptr);
+-	
++	if (incr >= 512 * 1024 || incr <= -512 * 1024)
++		xlog("sbrk big: incr=%d used=%u KB\n", (int)incr, (unsigned)(((char*)s_heap_ptr - (char*)gp_buf_64m) / 1024));
++
+ 	return curr_ptr;
+ }
+ 
++// free() tracer. The emulator aborted inside newlib's _free_r with an address
++// error, which means free() received either a misaligned pointer or one that
++// never came from malloc (leaving _free_r to chase a garbage chunk header).
++// Log such calls together with the caller's return address so the offending
++// code can be identified from the log. The link uses --wrap=free.
++void __real_free(void *ptr) __attribute__((weak));
++
++__attribute__((noinline)) void __wrap_free(void *ptr)
++{
++	if (ptr)
++	{
++		unsigned long p = (unsigned long)ptr;
++		unsigned long heap_beg = (unsigned long)gp_buf_64m;
++		unsigned long heap_end = heap_beg + 0x4000000;
++
++		if (((p & 7) != 0) || (p < heap_beg) || (p >= heap_end))
++		{
++			unsigned ra;
++			asm volatile ("move %0, $ra" : "=r" (ra));
++
++			unsigned size_word = 0;
++			if ((p & 3) == 0)
++				size_word = *(volatile unsigned *)(p - 4);
++
++			xlog("[FREE-TRACE] invalid ptr=%p ra=%p size=0x%08X heap=[%p,%p)\n",
++				ptr, (void *)ra, size_word, (void *)heap_beg, (void *)heap_end);
++		}
++	}
++
++	__real_free(ptr);
++}
++
+ int open(const char *path, int flags, ...)
+ {
+ 	int fs_flags = 0;

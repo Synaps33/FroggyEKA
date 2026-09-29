@@ -1,0 +1,50 @@
+#pragma once
+#include_next <condition_variable>
+#include <mutex>
+#include <chrono>
+
+#ifndef _GLIBCXX_HAS_GTHREADS
+namespace std {
+    enum class cv_status { no_timeout, timeout };
+
+    class condition_variable {
+    public:
+        condition_variable() noexcept {}
+        ~condition_variable() = default;
+        condition_variable(const condition_variable&) = delete;
+        condition_variable& operator=(const condition_variable&) = delete;
+
+        void notify_one() noexcept {}
+        void notify_all() noexcept {}
+
+        void wait(unique_lock<mutex>&) noexcept {}
+
+        template<typename _Predicate>
+        void wait(unique_lock<mutex>& __lock, _Predicate __p) {
+            while (!__p()) {
+                wait(__lock);
+            }
+        }
+
+        template<typename _Rep, typename _Period>
+        cv_status wait_for(unique_lock<mutex>&, const chrono::duration<_Rep, _Period>&) {
+            return cv_status::no_timeout;
+        }
+
+        template<typename _Rep, typename _Period, typename _Predicate>
+        bool wait_for(unique_lock<mutex>& __lock, const chrono::duration<_Rep, _Period>&, _Predicate __p) {
+            return __p();
+        }
+
+        template<typename _Clock, typename _Duration>
+        cv_status wait_until(unique_lock<mutex>&, const chrono::time_point<_Clock, _Duration>&) {
+            return cv_status::no_timeout;
+        }
+
+        template<typename _Clock, typename _Duration, typename _Predicate>
+        bool wait_until(unique_lock<mutex>& __lock, const chrono::time_point<_Clock, _Duration>&, _Predicate __p) {
+            return __p();
+        }
+    };
+}
+#endif

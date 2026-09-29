@@ -1,0 +1,13 @@
+diff --git a/Makefile b/Makefile
+index 67a6175..4af875d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -11,7 +11,7 @@ CFLAGS += -DSF2000
+ 
+ CFLAGS += -O2 -DNDEBUG
+ CFLAGS += -Iinclude -I./include/compat/zlib
+-CFLAGS += -I../..
++CFLAGS += -I../.. -I../../include
+ CFLAGS += -D_7ZIP_ST
+ 
+ TARGET=libretro-common.a

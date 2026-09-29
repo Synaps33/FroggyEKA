@@ -1,0 +1,26 @@
+diff --git a/re2/prog.cc b/re2/prog.cc
+index 3b9596a..0709759 100644
+--- a/re2/prog.cc
++++ b/re2/prog.cc
+@@ -55,7 +55,7 @@ void Prog::Inst::InitEmptyWidth(EmptyOp empty, uint32_t out) {
+   empty_ = empty;
+ }
+ 
+-void Prog::Inst::InitMatch(int32_t id) {
++void Prog::Inst::InitMatch(int id) {
+   DCHECK_EQ(out_opcode_, 0);
+   set_opcode(kInstMatch);
+   match_id_ = id;
+diff --git a/re2/re2.h b/re2/re2.h
+index 449162a..323973d 100644
+--- a/re2/re2.h
++++ b/re2/re2.h
+@@ -985,7 +985,7 @@ namespace hooks {
+ // As per https://github.com/google/re2/issues/325, thread_local support in
+ // MinGW seems to be buggy. (FWIW, Abseil folks also avoid it.)
+ #define RE2_HAVE_THREAD_LOCAL
+-#if (defined(__APPLE__) && !(defined(TARGET_OS_OSX) && TARGET_OS_OSX)) || defined(__MINGW32__)
++#if (defined(__APPLE__) && !(defined(TARGET_OS_OSX) && TARGET_OS_OSX)) || defined(__MINGW32__) || defined(SF2000) || defined(NO_THREADS)
+ #undef RE2_HAVE_THREAD_LOCAL
+ #endif
+ 

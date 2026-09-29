@@ -1,0 +1,43 @@
+#pragma once
+#include_next <mutex>
+
+#ifndef _GLIBCXX_HAS_GTHREADS
+namespace std {
+    struct once_flag {
+        int _M_once = 0;
+        constexpr once_flag() noexcept = default;
+        once_flag(const once_flag&) = delete;
+        once_flag& operator=(const once_flag&) = delete;
+    };
+
+    template<typename _Callable, typename... _Args>
+    void call_once(once_flag& __once, _Callable&& __f, _Args&&... __args) {
+        if (!__once._M_once) {
+            __once._M_once = 1;
+            __f(__args...);
+        }
+    }
+
+    class mutex {
+    public:
+        constexpr mutex() noexcept {}
+        ~mutex() = default;
+        mutex(const mutex&) = delete;
+        mutex& operator=(const mutex&) = delete;
+        void lock() {}
+        bool try_lock() noexcept { return true; }
+        void unlock() {}
+    };
+
+    class recursive_mutex {
+    public:
+        constexpr recursive_mutex() noexcept {}
+        ~recursive_mutex() = default;
+        recursive_mutex(const recursive_mutex&) = delete;
+        recursive_mutex& operator=(const recursive_mutex&) = delete;
+        void lock() {}
+        bool try_lock() noexcept { return true; }
+        void unlock() {}
+    };
+}
+#endif

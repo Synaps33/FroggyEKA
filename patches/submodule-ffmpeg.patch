@@ -1,0 +1,21 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fb91002..b5d5c75 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -42,10 +42,10 @@ elseif (ANDROID)
+ 		"z")
+ elseif (UNIX)
+ 	target_link_libraries(${FFMPEG_CORE_NAME} INTERFACE
+-		"${CMAKE_CURRENT_SOURCE_DIR}/linux/x86_64/lib/libavformat.a"
+-		"${CMAKE_CURRENT_SOURCE_DIR}/linux/x86_64/lib/libavcodec.a"
+-		"${CMAKE_CURRENT_SOURCE_DIR}/linux/x86_64/lib/libswscale.a"
+-		"${CMAKE_CURRENT_SOURCE_DIR}/linux/x86_64/lib/libavutil.a"
+-		"${CMAKE_CURRENT_SOURCE_DIR}/linux/x86_64/lib/libswresample.a"
++		avformat
++		avcodec
++		swscale
++		avutil
++		swresample
+ 		"z")
+ endif()
+\ No newline at end of file

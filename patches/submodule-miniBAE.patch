@@ -1,0 +1,22 @@
+diff --git a/minibae/BAE_Source/Common/X_Decompress.c b/minibae/BAE_Source/Common/X_Decompress.c
+index 88ad11e..c418cdb 100755
+--- a/minibae/BAE_Source/Common/X_Decompress.c
++++ b/minibae/BAE_Source/Common/X_Decompress.c
+@@ -107,7 +107,7 @@
+ #endif
+ 
+ #if USE_CREATION_API == TRUE
+-void XGetShortCompressionName(SndCompressionType compressionType, void *cName)
++void XGetShortCompressionName(XDWORD compressionType, void *cName)
+ {
+     switch (compressionType)
+     {
+@@ -180,7 +180,7 @@ void XGetShortCompressionName(SndCompressionType compressionType, void *cName)
+     }
+ }
+ 
+-void XGetCompressionName(SndCompressionType compressionType, void *cName)
++void XGetCompressionName(XDWORD compressionType, void *cName)
+ {
+     switch (compressionType)
+     {

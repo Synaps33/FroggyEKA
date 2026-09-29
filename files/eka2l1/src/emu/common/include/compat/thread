@@ -1,0 +1,68 @@
+#pragma once
+#include_next <thread>
+#include <chrono>
+#include <functional>
+
+#ifndef _GLIBCXX_HAS_GTHREADS
+namespace std {
+    class thread {
+    public:
+        class id {
+            size_t _id = 1;
+        public:
+            constexpr id() noexcept : _id(0) {}
+            explicit id(size_t i) noexcept : _id(i) {}
+            friend bool operator==(id x, id y) noexcept { return x._id == y._id; }
+            friend bool operator!=(id x, id y) noexcept { return x._id != y._id; }
+            friend bool operator<(id x, id y) noexcept { return x._id < y._id; }
+            friend struct hash<id>;
+        };
+
+        thread() noexcept : joinable_(false) {}
+        thread(thread&& other) noexcept : joinable_(other.joinable_) {
+            other.joinable_ = false;
+        }
+        thread& operator=(thread&& other) noexcept {
+            if (joinable_) std::terminate();
+            joinable_ = other.joinable_;
+            other.joinable_ = false;
+            return *this;
+        }
+        thread(const thread&) = delete;
+        thread& operator=(const thread&) = delete;
+
+        template<typename _Callable, typename... _Args>
+        explicit thread(_Callable&& __f, _Args&&... __args) : joinable_(true) {
+        }
+
+        ~thread() {
+        }
+
+        bool joinable() const noexcept { return joinable_; }
+        void join() { joinable_ = false; }
+        void detach() { joinable_ = false; }
+        id get_id() const noexcept { return joinable_ ? id(1) : id(0); }
+
+        static unsigned int hardware_concurrency() noexcept { return 1; }
+
+    private:
+        bool joinable_ = false;
+    };
+
+    template<>
+    struct hash<thread::id> {
+        size_t operator()(const thread::id& id) const noexcept {
+            return id._id;
+        }
+    };
+
+    namespace this_thread {
+        inline thread::id get_id() noexcept { return thread::id(1); }
+        inline void yield() noexcept {}
+        template<typename _Rep, typename _Period>
+        inline void sleep_for(const chrono::duration<_Rep, _Period>&) {}
+        template<typename _Clock, typename _Duration>
+        inline void sleep_until(const chrono::time_point<_Clock, _Duration>&) {}
+    }
+}
+#endif
